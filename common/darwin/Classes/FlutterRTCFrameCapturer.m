@@ -14,6 +14,9 @@
   NSString* _path;
   FlutterResult _result;
   bool _gotFrame;
+  NSInteger _maxWidth;
+  NSInteger _quality;
+  BOOL _returnsJpegBytes;
 }
 
 - (instancetype)initWithTrack:(RTCVideoTrack*)track
@@ -25,6 +28,24 @@
     _track = track;
     _path = path;
     _result = result;
+    _returnsJpegBytes = NO;
+    [track addRenderer:self];
+  }
+  return self;
+}
+
+- (instancetype)initWithTrack:(RTCVideoTrack*)track
+                     maxWidth:(NSInteger)maxWidth
+                      quality:(NSInteger)quality
+                       result:(FlutterResult)result {
+  self = [super init];
+  if (self) {
+    _gotFrame = false;
+    _track = track;
+    _result = result;
+    _maxWidth = maxWidth;
+    _quality = quality;
+    _returnsJpegBytes = YES;
     [track addRenderer:self];
   }
   return self;
@@ -71,12 +92,31 @@
     outputSize = CGRectMake(0, 0, frame.width, frame.height);
   }
   CIContext* tempContext = [CIContext contextWithOptions:nil];
+  if (_returnsJpegBytes && outputSize.size.width > _maxWidth) {
+    CGFloat scale = (CGFloat)_maxWidth / outputSize.size.width;
+    ciImage = [ciImage imageByApplyingTransform:CGAffineTransformMakeScale(scale, scale)];
+    outputSize = CGRectMake(0, 0, _maxWidth, round(outputSize.size.height * scale));
+  }
   CGImageRef cgImage = [tempContext createCGImage:ciImage fromRect:outputSize];
+  if (cgImage == nil) {
+    if (shouldRelease)
+      CVPixelBufferRelease(pixelBufferRef);
+    if (_returnsJpegBytes) {
+      dispatch_async(dispatch_get_main_queue(), ^{
+        self->_result([FlutterError errorWithCode:@"CaptureFrameJpegFailed"
+                                           message:@"Could not create a resized image from the video frame."
+                                           details:nil]);
+        [self->_track removeRenderer:self];
+        self->_track = nil;
+      });
+    }
+    return;
+  }
   NSData* imageData;
 #if TARGET_OS_IPHONE
   UIImage* uiImage = [UIImage imageWithCGImage:cgImage];
-  if ([[_path pathExtension] isEqualToString:@"jpg"]) {
-    imageData = UIImageJPEGRepresentation(uiImage, 1.0f);
+  if (_returnsJpegBytes || [[_path pathExtension] isEqualToString:@"jpg"]) {
+    imageData = UIImageJPEGRepresentation(uiImage, _returnsJpegBytes ? (CGFloat)_quality / 100.0f : 1.0f);
   } else {
     imageData = UIImagePNGRepresentation(uiImage);
   }
@@ -84,8 +124,11 @@
   NSBitmapImageRep* newRep = [[NSBitmapImageRep alloc] initWithCGImage:cgImage];
   [newRep setSize:NSSizeToCGSize(outputSize.size)];
   NSDictionary<NSBitmapImageRepPropertyKey, id>* quality = @{NSImageCompressionFactor : @1.0f};
-  if ([[_path pathExtension] isEqualToString:@"jpg"]) {
-    imageData = [newRep representationUsingType:NSBitmapImageFileTypeJPEG properties:quality];
+  if (_returnsJpegBytes || [[_path pathExtension] isEqualToString:@"jpg"]) {
+    NSDictionary<NSBitmapImageRepPropertyKey, id>* jpegProperties = _returnsJpegBytes
+        ? @{NSImageCompressionFactor : @((CGFloat)_quality / 100.0f)}
+        : quality;
+    imageData = [newRep representationUsingType:NSBitmapImageFileTypeJPEG properties:jpegProperties];
   } else {
     imageData = [newRep representationUsingType:NSBitmapImageFileTypePNG properties:quality];
   }
@@ -93,6 +136,20 @@
   CGImageRelease(cgImage);
   if (shouldRelease)
     CVPixelBufferRelease(pixelBufferRef);
+  if (_returnsJpegBytes) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+      if (imageData) {
+        self->_result(imageData);
+      } else {
+        self->_result([FlutterError errorWithCode:@"CaptureFrameJpegFailed"
+                                           message:@"Could not encode the video frame as JPEG."
+                                           details:nil]);
+      }
+      [self->_track removeRenderer:self];
+      self->_track = nil;
+    });
+    return;
+  }
 
   // Ensure the parent directory exists before writing the file
   NSString* parentDir = [_path stringByDeletingLastPathComponent];

@@ -12,10 +12,12 @@ import android.os.Looper;
 import org.webrtc.VideoFrame;
 import org.webrtc.VideoSink;
 import org.webrtc.VideoTrack;
+import org.webrtc.JavaI420Buffer;
 import org.webrtc.YuvHelper;
 
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
@@ -26,12 +28,28 @@ public class FrameCapturer implements VideoSink {
     private final VideoTrack videoTrack;
     private File file;
     private final MethodChannel.Result callback;
+    private final int maxWidth;
+    private final int quality;
+    private final boolean returnsJpegBytes;
     private boolean gotFrame = false;
 
     public FrameCapturer(VideoTrack track, File file, MethodChannel.Result callback) {
         videoTrack = track;
         this.file = file;
         this.callback = callback;
+        this.maxWidth = 0;
+        this.quality = 100;
+        this.returnsJpegBytes = false;
+        track.addSink(this);
+    }
+
+    public FrameCapturer(VideoTrack track, int maxWidth, int quality, MethodChannel.Result callback) {
+        videoTrack = track;
+        this.file = null;
+        this.callback = callback;
+        this.maxWidth = maxWidth;
+        this.quality = quality;
+        this.returnsJpegBytes = true;
         track.addSink(this);
     }
 
@@ -41,6 +59,10 @@ public class FrameCapturer implements VideoSink {
             return;
         gotFrame = true;
         videoFrame.retain();
+        if (returnsJpegBytes) {
+            captureJpegBytes(videoFrame);
+            return;
+        }
         VideoFrame.Buffer buffer = videoFrame.getBuffer();
         VideoFrame.I420Buffer i420Buffer = buffer.toI420();
         ByteBuffer y = i420Buffer.getDataY();
@@ -123,6 +145,92 @@ public class FrameCapturer implements VideoSink {
             callback.error("IllegalArgumentException", iae.getLocalizedMessage(), iae);
         } finally {
             file = null;
+        }
+    }
+
+    private void captureJpegBytes(VideoFrame videoFrame) {
+        VideoFrame.Buffer scaledBuffer = null;
+        VideoFrame.I420Buffer i420Buffer = null;
+        VideoFrame.I420Buffer rotatedBuffer = null;
+        byte[] jpegBytes = null;
+        Exception captureError = null;
+        try {
+            VideoFrame.Buffer source = videoFrame.getBuffer();
+            int rotation = videoFrame.getRotation();
+            int rotatedSourceWidth = rotation == 90 || rotation == 270
+                ? source.getHeight() : source.getWidth();
+            int rotatedSourceHeight = rotation == 90 || rotation == 270
+                ? source.getWidth() : source.getHeight();
+            double scale = Math.min(1.0, (double) maxWidth / rotatedSourceWidth);
+            int outputWidth = Math.max(2, ((int) Math.floor(rotatedSourceWidth * scale)) & ~1);
+            int outputHeight = Math.max(2, ((int) Math.floor(rotatedSourceHeight * scale)) & ~1);
+            int unrotatedWidth = rotation == 90 || rotation == 270 ? outputHeight : outputWidth;
+            int unrotatedHeight = rotation == 90 || rotation == 270 ? outputWidth : outputHeight;
+            scaledBuffer = source.cropAndScale(
+                0, 0, source.getWidth(), source.getHeight(), unrotatedWidth, unrotatedHeight);
+            i420Buffer = scaledBuffer.toI420();
+
+            VideoFrame.I420Buffer jpegBuffer = i420Buffer;
+            if (rotation != 0) {
+                rotatedBuffer = JavaI420Buffer.allocate(outputWidth, outputHeight);
+                YuvHelper.I420Rotate(
+                    i420Buffer.getDataY(), i420Buffer.getStrideY(),
+                    i420Buffer.getDataU(), i420Buffer.getStrideU(),
+                    i420Buffer.getDataV(), i420Buffer.getStrideV(),
+                    rotatedBuffer.getDataY(), rotatedBuffer.getStrideY(),
+                    rotatedBuffer.getDataU(), rotatedBuffer.getStrideU(),
+                    rotatedBuffer.getDataV(), rotatedBuffer.getStrideV(),
+                    unrotatedWidth, unrotatedHeight, rotation);
+                jpegBuffer = rotatedBuffer;
+            }
+
+            int width = jpegBuffer.getWidth();
+            int height = jpegBuffer.getHeight();
+            int chromaWidth = (width + 1) / 2;
+            int chromaHeight = (height + 1) / 2;
+            int minSize = width * height + chromaWidth * chromaHeight * 2;
+            ByteBuffer nv12 = ByteBuffer.allocateDirect(minSize);
+            YuvHelper.I420ToNV12(
+                jpegBuffer.getDataY(), jpegBuffer.getStrideY(),
+                jpegBuffer.getDataU(), jpegBuffer.getStrideU(),
+                jpegBuffer.getDataV(), jpegBuffer.getStrideV(),
+                nv12, width, height);
+            byte[] nv21 = new byte[minSize];
+            int ySize = width * height;
+            ByteBuffer yPlane = nv12.duplicate();
+            yPlane.position(0);
+            yPlane.get(nv21, 0, ySize);
+            ByteBuffer uvPlane = nv12.duplicate();
+            uvPlane.position(ySize);
+            for (int index = ySize; index + 1 < minSize; index += 2) {
+                byte u = uvPlane.get();
+                byte v = uvPlane.get();
+                nv21[index] = v;
+                nv21[index + 1] = u;
+            }
+            YuvImage image = new YuvImage(nv21, ImageFormat.NV21, width, height, null);
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            if (!image.compressToJpeg(new Rect(0, 0, width, height), quality, output)) {
+                throw new IllegalStateException("JPEG compression failed.");
+            }
+            jpegBytes = output.toByteArray();
+        } catch (Exception error) {
+            captureError = error;
+        } finally {
+            if (rotatedBuffer != null) rotatedBuffer.release();
+            if (i420Buffer != null) i420Buffer.release();
+            if (scaledBuffer != null) scaledBuffer.release();
+            videoFrame.release();
+            byte[] resultBytes = jpegBytes;
+            Exception resultError = captureError;
+            new Handler(Looper.getMainLooper()).post(() -> {
+                videoTrack.removeSink(this);
+                if (resultError == null) {
+                    callback.success(resultBytes);
+                } else {
+                    callback.error("CaptureFrameJpegFailed", resultError.getLocalizedMessage(), resultError);
+                }
+            });
         }
     }
 }

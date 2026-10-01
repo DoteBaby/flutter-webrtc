@@ -721,6 +721,23 @@ static void FlutterWebRTCApplyFieldTrials(void) {
                                    details:nil]);
       }
     }
+  } else if ([@"captureFrameJpeg" isEqualToString:call.method]) {
+    NSDictionary* argsMap = call.arguments;
+    NSString* trackId = argsMap[@"trackId"];
+    NSString* peerConnectionId = argsMap[@"peerConnectionId"];
+    NSNumber* maxWidth = argsMap[@"maxWidth"];
+    NSNumber* quality = argsMap[@"quality"];
+    RTCMediaStreamTrack* track = [self trackForId:trackId peerConnectionId:peerConnectionId];
+    if ([track isKindOfClass:[RTCVideoTrack class]] && maxWidth.integerValue > 0 && quality.integerValue >= 0 && quality.integerValue <= 100) {
+      [self mediaStreamTrackCaptureFrameJpeg:(RTCVideoTrack*)track
+                                    maxWidth:maxWidth.integerValue
+                                     quality:quality.integerValue
+                                      result:result];
+    } else {
+      result([FlutterError errorWithCode:@"CaptureFrameJpegFailed"
+                                  message:@"A valid video track, width, and JPEG quality are required."
+                                  details:nil]);
+    }
   } else if ([@"setLocalDescription" isEqualToString:call.method]) {
     NSDictionary* argsMap = call.arguments;
     NSString* peerConnectionId = argsMap[@"peerConnectionId"];
