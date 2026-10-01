@@ -790,6 +790,21 @@ public class MethodCallHandlerImpl implements MethodCallHandler, StateProvider {
         }
         break;
       }
+      case "captureFrameJpeg": {
+        String videoTrackId = call.argument("trackId");
+        String peerConnectionId = call.argument("peerConnectionId");
+        Integer maxWidth = call.argument("maxWidth");
+        Integer quality = call.argument("quality");
+        MediaStreamTrack track = videoTrackId == null
+            ? null : getTrackForId(videoTrackId, peerConnectionId);
+        if (track instanceof VideoTrack && maxWidth != null && maxWidth > 0
+            && quality != null && quality >= 0 && quality <= 100) {
+          new FrameCapturer((VideoTrack) track, maxWidth, quality, result);
+        } else {
+          resultError("captureFrameJpeg", "A valid video track, width, and JPEG quality are required.", result);
+        }
+        break;
+      }
       case "getLocalDescription": {
         String peerConnectionId = call.argument("peerConnectionId");
         PeerConnection peerConnection = getPeerConnection(peerConnectionId);

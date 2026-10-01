@@ -926,6 +926,16 @@ typedef void (^NavigatorUserMediaSuccessCallback)(RTCMediaStream* mediaStream);
                                                                result:result];
 }
 
+- (void)mediaStreamTrackCaptureFrameJpeg:(RTCVideoTrack*)track
+                                maxWidth:(NSInteger)maxWidth
+                                 quality:(NSInteger)quality
+                                  result:(FlutterResult)result {
+  self.frameCapturer = [[FlutterRTCFrameCapturer alloc] initWithTrack:track
+                                                            maxWidth:maxWidth
+                                                             quality:quality
+                                                              result:result];
+}
+
 - (void)mediaStreamTrackStop:(RTCMediaStreamTrack*)track {
   if (track) {
     track.isEnabled = NO;

@@ -17,6 +17,11 @@
                               toPath:(nonnull NSString*)path
                               result:(nonnull FlutterResult)result;
 
+- (void)mediaStreamTrackCaptureFrameJpeg:(nonnull RTCVideoTrack*)track
+                                maxWidth:(NSInteger)maxWidth
+                                 quality:(NSInteger)quality
+                                  result:(nonnull FlutterResult)result;
+
 - (void)selectAudioInput:(nonnull NSString*)deviceId result:(nullable FlutterResult)result;
 
 - (void)selectAudioOutput:(nonnull NSString*)deviceId result:(nullable FlutterResult)result;
