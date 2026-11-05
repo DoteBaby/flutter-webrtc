@@ -104,6 +104,13 @@ namespace webrtc {
         // TODO(tommi): This method should be on the track and ideally volume should
         // be applied in the track in a way that does not affect clones of the track.
         virtual void SetVolume(double volume) {}
+        // DOTE PATCH: added in libwebrtc M144 right after SetVolume. This stub
+        // must mirror the real vtable order exactly; without this entry every
+        // later virtual call is shifted by one slot (AddSink lands on
+        // UnregisterAudioObserver and RemoveSink lands on AddSink), so
+        // FlutterRTCAudioSink -close leaves a deleted sink registered and
+        // RemoteAudioSource::OnData crashes after a recording stops.
+        virtual double GetVolume() const { return 1.0; }
         // Registers/unregisters observers to the audio source.
         virtual void RegisterAudioObserver(AudioObserver* observer) {}
         virtual void UnregisterAudioObserver(AudioObserver* observer) {}
